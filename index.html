@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Resume Qualifier</title>
+    <script>
+       async function uploadResumes() {
+    const allFiles = Array.from(document.getElementById('resumeInput').files);
+    const optionalFields = Array.from(document.querySelectorAll('input[name="fields"]:checked')).map(e => e.value);
+    const criteria = document.getElementById('criteriaInput').value;
+    const progressBar = document.getElementById('progressBar');
+    const statusText = document.getElementById('statusText');
+
+    if (!criteria.trim()) {
+        alert("Please provide valid qualification criteria.");
+        return;
+    }
+
+    let parsedCriteria;
+    try {
+        parsedCriteria = JSON.parse(criteria);
+    } catch (error) {
+        alert("Invalid JSON format for qualification criteria. Example: {\"experience\": \">5 years\", \"skills\": [\"Python\", \"Machine Learning\"]}");
+        return;
+    }
+
+    const fields = ["name", "email", "phone", ...optionalFields];
+    const batchSize = 10; // Adjust batch size as needed
+    let allResults = [];
+
+    // **Filter Only PDFs**
+    const validFiles = [];
+    const skippedFiles = [];
+
+    allFiles.forEach(file => {
+        if (file.type === "application/pdf") {
+            validFiles.push(file);
+        } else {
+            skippedFiles.push(file.name);
+        }
+    });
+
+    // **Show warning if any files were skipped**
+    if (skippedFiles.length > 0) {
+        alert(`The following files were skipped because only PDFs are supported:\n\n${skippedFiles.join("\n")}`);
+    }
+
+    if (validFiles.length === 0) {
+        alert("No valid PDF resumes to process.");
+        return;
+    }
+
+    // Reset progress bar and status
+    progressBar.value = 0;
+    progressBar.max = validFiles.length;
+    statusText.innerText = `Uploading 0/${validFiles.length} resumes...`;
+    progressBar.style.display = "block";
+    statusText.style.display = "block";
+
+    for (let i = 0; i < validFiles.length; i += batchSize) {
+        const batchFiles = validFiles.slice(i, i + batchSize);
+        const formData = new FormData();
+
+        batchFiles.forEach(file => formData.append("resumes", file));
+        formData.append("fields", JSON.stringify(fields));
+        formData.append("criteria", JSON.stringify(parsedCriteria));
+
+        let success = false;
+        let attempts = 0;
+        const maxRetries = 2; // Allow 2 retries
+
+        while (!success && attempts <= maxRetries) {
+            try {
+                const response = await fetch("https://resume-qualifier-backend-u2hfsb6yrq-el.a.run.app/upload", {
+                    method: "POST",
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Batch ${i / batchSize + 1} failed to upload`);
+                }
+
+                const result = await response.json();
+                allResults = allResults.concat(result.filtered_resumes || []);
+
+                // Update progress bar and status
+                progressBar.value += batchFiles.length;
+                statusText.innerText = `Uploading ${Math.min(progressBar.value, validFiles.length)}/${validFiles.length} resumes...`;
+
+                // Display partial results after each batch
+                displayResults({ filtered_resumes: allResults });
+
+                success = true; // Mark batch as successfully processed
+            } catch (error) {
+                attempts++;
+                console.error(`Error uploading batch ${i / batchSize + 1} (Attempt ${attempts}):`, error);
+                if (attempts > maxRetries) {
+                    alert(`Batch ${i / batchSize + 1} failed after ${maxRetries} retries. Some resumes may not have been processed.`);
+                } else {
+                    console.warn(`Retrying batch ${i / batchSize + 1} in 2 seconds...`);
+                    await new Promise(resolve => setTimeout(resolve, 2000)); // Wait before retrying
+                }
+            }
+        }
+    }
+
+    // Upload complete
+    statusText.innerText = `Upload complete! Processed ${allResults.length}/${validFiles.length} resumes.`;
+}
+
+
+
+    let filteredResumes = []; // Global variable to store filtered resumes
+
+        function displayResults(result) {
+    const table = document.getElementById("resultsTable");
+    table.innerHTML = "";
+
+    if (!result || !Array.isArray(result.filtered_resumes) || result.filtered_resumes.length === 0) {
+        table.innerHTML = "<tr><td colspan='100%'>No resumes met the criteria or invalid response from backend.</td></tr>";
+        return;
+    }
+
+    filteredResumes = result.filtered_resumes; // Store filtered resumes globally
+
+    let headers = Object.keys(result.filtered_resumes[0] || {});
+    let headerRow = "<tr>" + headers.map(h => `<th>${h}</th>`).join("") + "<th>Resume</th></tr>";
+    table.innerHTML += headerRow;
+
+    const backendUrl = "https://resume-qualifier-backend-u2hfsb6yrq-el.a.run.app";
+
+    result.filtered_resumes.forEach(resume => {
+        let fileName = resume.resume_link.split('/').pop(); // Extract only the filename
+        let downloadUrl = `${backendUrl}/download/${fileName}`; // Corrected URL format
+
+        let row = "<tr>" + headers.map(h => `<td>${resume[h] || ''}</td>`).join("") +
+            `<td><a href='${downloadUrl}' download>Download</a></td></tr>`;
+        table.innerHTML += row;
+    });
+}
+
+
+            function downloadAll() {
+            if (!filteredResumes.length) {
+        alert("No resumes to download!");
+        return;
+    }
+    const filteredFiles = filteredResumes.map(resume => resume.resume_link.split('/').pop());
+
+    fetch('https://resume-qualifier-backend-u2hfsb6yrq-el.a.run.app/download-all', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ filtered_files: filteredFiles })
+    })
+    .then(response => {
+        if (!response.ok) throw new Error("Error downloading resumes");
+        return response.blob();
+    })
+    .then(blob => {
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "filtered_resumes.zip";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+    })
+    .catch(error => console.error("Download error:", error));
+}
+
+
+        function sortTable(column) {
+            const table = document.getElementById("resultsTable");
+            const rows = Array.from(table.getElementsByTagName("tr")).slice(1);
+
+            const index = Array.from(table.rows[0].cells).findIndex(th => th.textContent.includes(column));
+            if (index === -1) return;
+
+            rows.sort((rowA, rowB) => {
+                const cellA = rowA.cells[index].textContent.trim();
+                const cellB = rowB.cells[index].textContent.trim();
+                return cellA.localeCompare(cellB, undefined, { numeric: true });
+            });
+
+            table.innerHTML = table.rows[0].outerHTML + rows.map(row => row.outerHTML).join("");
+        }
+    </script>
+</head>
+<body>
+    <h2>Resume Qualifier</h2>
+
+    <label>Upload Resumes:</label>
+    <input type="file" id="resumeInput" multiple>
+    <br><br>
+
+    <label for="criteriaInput" style="display: block; margin: 10px 0; font-weight: bold;">
+    Enter Qualification Criteria (JSON Format) - Please refer to the example below for the exact format:
+</label>
+<textarea id="criteriaInput" rows="5" cols="50" placeholder='Example: {"experience": ">5 years", "skills": ["Python", "Machine Learning"]}'></textarea>
+<br>
+
+    <label>Select Fields to Extract:</label>
+    <br>
+    <input type="checkbox" name="fields" value="name" checked disabled> Name (Required)
+    <input type="checkbox" name="fields" value="email" checked disabled> Email (Required)
+    <input type="checkbox" name="fields" value="phone" checked disabled> Phone Number (Required)
+    <br>
+    <input type="checkbox" name="fields" value="skills"> Skills
+<!--    <input type="checkbox" name="fields" value="experience"> Experience-->
+    <input type="checkbox" name="fields" value="education"> Education
+    <br>
+
+    <button onclick="uploadResumes()">Upload</button>
+    <button onclick="downloadAll()">Download All</button>
+    <progress id="progressBar" value="0" max="100" style="width: 100%; display: none;"></progress>
+<p id="statusText" style="display: none;"></p>
+    <h3>Results:</h3>
+    <table border="1" id="resultsTable"></table>
+</body>
+</html>
